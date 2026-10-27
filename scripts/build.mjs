@@ -5,6 +5,7 @@ import {build} from 'esbuild';
 execFileSync(process.execPath,['scripts/verify.mjs'],{stdio:'inherit'});
 await mkdir('dist',{recursive:true});
 await copyFile('index.html','dist/index.html');
+await copyFile('scripts/offline-audio.js','dist/offline-audio.js');
 await build({
   entryPoints:['scripts/native-bridge.js'],
   outfile:'dist/native-tts.js',
