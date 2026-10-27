@@ -1,4 +1,4 @@
-name: Test, build Android APK and deploy web app
+name: Test, synthesize offline pronunciation and deploy Android APK
 on:
   push:
     branches: [main]
@@ -16,7 +16,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -38,6 +38,26 @@ jobs:
         run: npm test
       - name: Build web assets and native bridge
         run: npm run build
+      - name: Install offline pronunciation tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq espeak-ng ffmpeg
+      - name: Synthesize all 4924 English headwords (US and UK)
+        run: python3 scripts/build_audio.py
+      - name: Verify complete audio assets
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import json
+          folder=Path('dist/audio')
+          data=json.loads((folder/'voice-map.json').read_text())
+          assert data['wordCount']==4924, 'Wrong word count'
+          assert len(data['voices']['en-US'])==4924
+          assert len(data['voices']['en-GB'])==4924
+          assert len(list(folder.rglob('*.mp3')))==124, 'Missing offline speech packs'
+          assert all(p.stat().st_size>1000 for p in folder.rglob('*.mp3'))
+          print('PASS: every word has offline US and UK pronunciation')
+          PY
       - name: Generate Android project
         run: npx cap add android
       - name: Sync TTS, Filesystem and Share plugins
