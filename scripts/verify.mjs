@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 const html=readFileSync(new URL('../index.html',import.meta.url),'utf8');
-const match=html.match(/window\\.__vocab=(\\[[^\\n]*\\]);/);
+const match=html.match(/window\.__vocab=(\[[^\n]*\]);/);
 assert.ok(match,'Inline vocabulary dataset is present');
 const words=JSON.parse(match[1]);
 assert.equal(words.length,4924,'Word count');
