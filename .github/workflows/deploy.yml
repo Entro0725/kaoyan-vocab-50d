@@ -1,31 +1,64 @@
-name: Test, build and deploy vocabulary app
+name: Test, build Android APK and deploy web app
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
 permissions:
   contents: read
   pages: write
   id-token: write
+
 concurrency:
   group: pages
   cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: npm test
-      - run: npm run build
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install Android 16 SDK
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+      - name: Install JS dependencies
+        run: npm install --no-audit --no-fund
+      - name: Verify vocabulary and customizable reviews
+        run: npm test
+      - name: Build web assets and native bridge
+        run: npm run build
+      - name: Generate Android project
+        run: npx cap add android
+      - name: Sync TTS, Filesystem and Share plugins
+        run: npx cap sync android
+      - name: Compile installable Android debug APK
+        run: cd android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon
+      - name: Copy APK to public download directory
+        run: |
+          mkdir -p dist/downloads
+          cp android/app/build/outputs/apk/debug/app-debug.apk dist/downloads/kaoyan-vocab-50d.apk
+          ls -lh dist/downloads/kaoyan-vocab-50d.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kaoyan-vocab-50d-android-apk
+          path: dist/downloads/kaoyan-vocab-50d.apk
+          retention-days: 90
       - uses: actions/configure-pages@v5
         with:
           enablement: true
       - uses: actions/upload-pages-artifact@v4
         with:
           path: dist
+
   deploy:
     environment:
       name: github-pages
