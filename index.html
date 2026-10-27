@@ -20,6 +20,7 @@
 </style>
   <title>词汇冲刺 · 50天</title>
   <script defer src="./native-tts.js"></script>
+  <script defer src="./offline-audio.js"></script>
 </head>
 <body>
   <div class="shell">
@@ -55,7 +56,7 @@ const GOALS=[
   {id:'two',  label:'加练 · 考频 ≥2', min:2, description:'包含考频2次'},
   {id:'all',  label:'全量 · 所有词',  min:0, description:'包含低频与0标记'}
 ];
-const DEFAULT_SETTINGS={goal:'core',autoSpeak:false,accent:'en-US',speed:0.88,bonus:0,reviewTarget:100,reviewBatch:100,lapseMinutes:10};
+const DEFAULT_SETTINGS={goal:'core',autoSpeak:false,accent:'en-US',speed:0.88,bonus:0,reviewTarget:100,reviewBatch:100,lapseMinutes:10,voiceSource:'offline'};
 /** User-editable quantities always have a safe range, including restored backups. */
 function boundedSetting(value,fallback,min=1,max=500){
   if(value===null||value===undefined||value==='')return fallback;
@@ -191,11 +192,20 @@ function toast(message){
   clearTimeout(toastHandle);toastHandle=setTimeout(()=>el.classList.remove('show'),2700);
 }
 function speak(text){
+  if(progress.settings.voiceSource!=='system'){
+    const embedded=window.__kaoyanOfflineSpeech;
+    if(embedded?.supported){
+      embedded.speak(text,progress.settings.accent||'en-US',Number(progress.settings.speed)||.88)
+        .catch(error=>{console.warn('Embedded pronunciation',error);toast('内置发音未能播放，请检查音量或更新 APP');});
+      return;
+    }
+  }
+  window.__kaoyanOfflineSpeech?.stop();
   const native=window.__kaoyanNativeTTS;
   if(native?.supported){
     const phrase=String(text).replace(/\s*\/\s*/g,', ');
     native.speak(phrase,progress.settings.accent||'en-US',Number(progress.settings.speed)||.88)
-      .catch(error=>{console.warn('Native TTS',error);toast('安卓发音失败，请在手机设置中安装英语语音包');});
+      .catch(error=>{console.warn('Native TTS',error);toast('系统语音不可用，可在设置中改用内置离线发音');});
     return;
   }
   if(!('speechSynthesis' in window)||!('SpeechSynthesisUtterance' in window)){toast('当前浏览器不支持语音朗读');return;}
@@ -392,7 +402,8 @@ function renderSettings(stats){
       <div class="setting-row"><label for="lapseMinutes">点击「不会」后多久复习<small>5 分钟、10 分钟，或自定 1–120 分钟</small></label><select class="field" id="lapseMinutes" data-setting="lapseMinutes">${[5,10,15,20,30,60].concat([boundedSetting(progress.settings.lapseMinutes,10,1,120)]).filter((n,i,a)=>a.indexOf(n)===i).sort((a,b)=>a-b).map(m=>`<option value="${m}" ${boundedSetting(progress.settings.lapseMinutes,10,1,120)===m?'selected':''}>${m} 分钟</option>`).join('')}</select></div>
       <div class="setting-row"><label for="customLapse">自定义分钟数<small>填写后自动覆盖上方选项</small></label><input class="field number-field" id="customLapse" type="number" inputmode="numeric" min="1" max="120" step="1" placeholder="例如 5 或 10" data-setting="customLapse" /></div>
       <p class="footnote">复习目标是计划，不是强制上限。单次批量限制只影响组队数量；本来已经排好的到期时间不因改设置而追溯改变。</p></section>
-    <section class="card form-card"><h3>发音设置</h3><p>使用手机或电脑浏览器的系统英语语音。点击扬声器即可听读。</p>
+    <section class="card form-card"><h3>发音设置</h3><p>APP 内置全部 4,924 词的英式与美式离线音频，无需安装手机系统语音包。内置语音为合成音，想使用手机更自然的声音也可切换系统语音。</p>
+      <div class="setting-row"><label for="voiceSource">语音来源<small>推荐内置离线发音，安装后不联网也能听单词</small></label><select class="field" id="voiceSource" data-setting="voiceSource"><option value="offline" ${progress.settings.voiceSource!=='system'?'selected':''}>APP 内置离线发音（推荐）</option><option value="system" ${progress.settings.voiceSource==='system'?'selected':''}>手机系统语音（可能需语音包）</option></select></div>
       <div class="setting-row"><label for="accent">发音口音<small>优先选用设备提供的对应语音</small></label><select class="field" id="accent" data-setting="accent"><option value="en-US" ${progress.settings.accent==='en-US'?'selected':''}>美式英语</option><option value="en-GB" ${progress.settings.accent==='en-GB'?'selected':''}>英式英语</option></select></div>
       <div class="setting-row"><label for="speed">朗读速度</label><select class="field" id="speed" data-setting="speed">${[[0.7,'较慢 · 0.7x'],[0.88,'舒适 · 0.88x'],[1,'正常 · 1.0x'],[1.12,'稍快 · 1.12x']].map(([s,t])=>`<option value="${s}" ${Number(progress.settings.speed)===s?'selected':''}>${t}</option>`).join('')}</select></div>
       <div class="setting-row"><label for="autoSpeak">每张词卡自动朗读<small>部分手机浏览器需手动点击播放</small></label><input id="autoSpeak" type="checkbox" data-setting="autoSpeak" ${progress.settings.autoSpeak?'checked':''}/></div>
@@ -464,6 +475,7 @@ document.addEventListener('change',event=>{
   if(setting==='goal'){progress.settings.goal=GOALS.find(g=>g.id===t.value)?.id||'core';session=null;}
   if(setting==='accent')progress.settings.accent=t.value==='en-GB'?'en-GB':'en-US';
   if(setting==='speed')progress.settings.speed=Number(t.value)||.88;
+  if(setting==='voiceSource')progress.settings.voiceSource=t.value==='system'?'system':'offline';
   if(setting==='autoSpeak')progress.settings.autoSpeak=t.checked;
   if(setting==='reviewTarget')progress.settings.reviewTarget=boundedSetting(t.value,100,1,500);
   if(setting==='reviewBatch'){progress.settings.reviewBatch=boundedSetting(t.value,100,1,500);session=null;}
