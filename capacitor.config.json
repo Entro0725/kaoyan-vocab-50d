@@ -1,6 +1,6 @@
 {
-  "appId": "com.entro0725.kaoyanvocab",
-  "appName": "考研词汇50天",
+  "appId": "com.entro0725.kaoyanvocab.offline",
+  "appName": "考研词汇50天·离线发音",
   "webDir": "dist",
   "server": {
     "androidScheme": "https"
