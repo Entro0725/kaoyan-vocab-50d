@@ -26,7 +26,8 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
+      # GitHub-hosted Ubuntu runners already provide the Android SDK.
+      # setup-android@v3 currently requests the removed 'tools' package.
       - uses: gradle/actions/setup-gradle@v4
       - name: Install Android 16 SDK
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
