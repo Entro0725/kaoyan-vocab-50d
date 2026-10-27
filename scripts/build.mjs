@@ -1,18 +1,8 @@
-import {mkdir,copyFile} from 'node:fs/promises';
-import {execFileSync} from 'node:child_process';
-import {build} from 'esbuild';
+import { rm, mkdir, copyFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 
 execFileSync(process.execPath,['scripts/verify.mjs'],{stdio:'inherit'});
+await rm('dist',{recursive:true,force:true});
 await mkdir('dist',{recursive:true});
 await copyFile('index.html','dist/index.html');
-await copyFile('scripts/offline-audio.js','dist/offline-audio.js');
-await build({
-  entryPoints:['scripts/native-bridge.js'],
-  outfile:'dist/native-tts.js',
-  bundle:true,
-  platform:'browser',
-  format:'iife',
-  target:['es2020'],
-  logLevel:'warning'
-});
-console.log('Web build + Capacitor bridge: dist/ ready');
+console.log('Web-only build complete: dist/index.html (no offline speech, no APK)');

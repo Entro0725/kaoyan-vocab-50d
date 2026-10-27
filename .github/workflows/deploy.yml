@@ -1,4 +1,4 @@
-name: Test, synthesize offline pronunciation and deploy Android APK
+name: Test and deploy web vocabulary app
 on:
   push:
     branches: [main]
@@ -16,64 +16,14 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '21'
-      - uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools'
-      - uses: gradle/actions/setup-gradle@v4
-      - name: Install Android 16 SDK
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
-      - name: Install JS dependencies
-        run: npm install --no-audit --no-fund
-      - name: Verify vocabulary and customizable reviews
-        run: npm test
-      - name: Build web assets and native bridge
-        run: npm run build
-      - name: Install offline pronunciation tools
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq espeak-ng ffmpeg
-      - name: Synthesize all 4924 English headwords (US and UK)
-        run: python3 scripts/build_audio.py
-      - name: Verify complete audio assets
-        run: |
-          python3 - <<'PY'
-          from pathlib import Path
-          import json
-          folder=Path('dist/audio')
-          data=json.loads((folder/'voice-map.json').read_text())
-          assert data['wordCount']==4924, 'Wrong word count'
-          assert len(data['voices']['en-US'])==4924
-          assert len(data['voices']['en-GB'])==4924
-          assert len(list(folder.rglob('*.mp3')))==124, 'Missing offline speech packs'
-          assert all(p.stat().st_size>1000 for p in folder.rglob('*.mp3'))
-          print('PASS: every word has offline US and UK pronunciation')
-          PY
-      - name: Generate Android project
-        run: npx cap add android
-      - name: Sync TTS, Filesystem and Share plugins
-        run: npx cap sync android
-      - name: Compile installable Android debug APK
-        run: cd android && chmod +x gradlew && ./gradlew assembleDebug --no-daemon
-      - name: Copy APK to public download directory
-        run: |
-          mkdir -p dist/downloads
-          cp android/app/build/outputs/apk/debug/app-debug.apk dist/downloads/kaoyan-vocab-50d.apk
-          ls -lh dist/downloads/kaoyan-vocab-50d.apk
-      - uses: actions/upload-artifact@v4
-        with:
-          name: kaoyan-vocab-50d-android-apk
-          path: dist/downloads/kaoyan-vocab-50d.apk
-          retention-days: 90
+      - run: npm test
+      - run: npm run build
       - uses: actions/configure-pages@v5
         with:
           enablement: true
@@ -82,11 +32,11 @@ jobs:
           path: dist
 
   deploy:
+    runs-on: ubuntu-latest
+    needs: build
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    needs: build
     steps:
       - id: deployment
         uses: actions/deploy-pages@v4
