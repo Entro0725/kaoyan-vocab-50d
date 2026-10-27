@@ -11,8 +11,15 @@
 @media(max-width:380px){.hero strong{font-size:26px}.metric .big{font-size:22px}.flashcard{min-height:335px}.word{font-size:30px}.word-meta{left:16px;right:15px}.tab{min-width:50px}}
 @media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 .note-actions{display:flex;flex-direction:column;gap:8px;align-items:center;margin-top:14px;max-width:100%;font-size:12px}.personal-note{font-size:12px;line-height:1.6;color:#687794;background:#fff9eb;border:1px solid #f5e7bf;padding:9px 11px;border-radius:12px;overflow-wrap:anywhere;width:100%;text-align:left}
+
+/* Adjustable retrieval settings */
+.review-target-line { margin: 11px 0 17px; font-size: .92rem; color: rgba(255,255,255,.9); }
+.review-target-line b { font-size:1.15rem; color: #fff; }
+.number-field { max-width: 138px; min-width:110px; text-align:center; }
+@media(max-width:450px){ .number-field{max-width:118px;} }
 </style>
   <title>词汇冲刺 · 50天</title>
+  <script defer src="./native-tts.js"></script>
 </head>
 <body>
   <div class="shell">
@@ -48,7 +55,12 @@ const GOALS=[
   {id:'two',  label:'加练 · 考频 ≥2', min:2, description:'包含考频2次'},
   {id:'all',  label:'全量 · 所有词',  min:0, description:'包含低频与0标记'}
 ];
-const DEFAULT_SETTINGS={goal:'core',autoSpeak:false,accent:'en-US',speed:0.88,bonus:0};
+const DEFAULT_SETTINGS={goal:'core',autoSpeak:false,accent:'en-US',speed:0.88,bonus:0,reviewTarget:100,reviewBatch:100,lapseMinutes:10};
+/** User-editable quantities always have a safe range, including restored backups. */
+function boundedSetting(value,fallback,min=1,max=500){
+  if(value===null||value===undefined||value==='')return fallback;
+  const n=Number(value);return Number.isFinite(n)?Math.max(min,Math.min(max,Math.floor(n))):fallback;
+}
 function localDateKey(value=new Date()){
   const d=value instanceof Date?value:new Date(value);
   return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
@@ -72,13 +84,13 @@ function isDue(card,now=Date.now()){
   return !!card && Number.isFinite(card.dueAt) && card.dueAt<=now;
 }
 /** Returns the next record without mutating the previous record. */
-function scheduleCard(previous, grade, at=new Date()){
+function scheduleCard(previous, grade, at=new Date(), options={}){
   if(!Number.isInteger(grade)||grade<0||grade>3)throw Error('Review grade must be 0..3');
   const now=at instanceof Date?at:new Date(at),nowMillis=now.getTime();
   const today=localDateKey(now);
   const p=previous||{};
   let intervalDays=0,delayMs=0,streak=Number(p.streak||0),successDays=Number(p.successDays||0);
-  if(grade===0){streak=0;intervalDays=0;delayMs=10*60*1000;}
+  if(grade===0){streak=0;intervalDays=0;delayMs=boundedSetting(options.lapseMinutes,10,1,120)*60*1000;}
   if(grade===1){streak=0;intervalDays=1;delayMs=ONE_DAY;}
   if(grade===2){streak++;intervalDays=p.intervalDays>=1?Math.max(2,Math.min(30,Math.round(p.intervalDays*2.0))):2;delayMs=intervalDays*ONE_DAY;}
   if(grade===3){streak++;intervalDays=p.intervalDays>=1?Math.max(4,Math.min(35,Math.round(p.intervalDays*2.5))):4;delayMs=intervalDays*ONE_DAY;}
@@ -116,10 +128,13 @@ function dailyStats(vocab,state,at=new Date()){
   const bonus=state.bonusDate===today?Number(state.settings.bonus||0):0;
   const newQuota=baseDaily+bonus;
   const todayEvents=(state.events||[]).filter(e=>localDateKey(e.t)===today);
+  const reviewedToday=todayEvents.filter(e=>!e.new).length;
+  const reviewTarget=boundedSetting(state.settings.reviewTarget,100,1,500);
+  const reviewBatch=boundedSetting(state.settings.reviewBatch,100,1,500);
   return {
     today,day:passed+1,daysRemaining:Math.max(0,PLAN_DAYS-passed),remainingLearnDays,
     goal:getGoal(state.settings.goal),poolSize:pool.length,seen,unseen,due,
-    mastered:masteredCount,hard,learnedToday,reviewedToday:todayEvents.length,
+    mastered:masteredCount,hard,learnedToday,reviewedToday,reviewTarget,reviewBatch,reviewRemaining:Math.max(0,reviewTarget-reviewedToday),
     baseDaily,newQuota,newRemaining:Math.max(0,newQuota-learnedToday),
     totalProgress:pool.length?Math.round(seen*100/pool.length):0,
     masteryProgress:pool.length?Math.round(masteredCount*100/pool.length):0
@@ -131,11 +146,17 @@ function sessionWords(vocab,state,mode='mixed',at=new Date()){
   const due=pool.filter(w=>isDue(state.cards[w.id],now))
     .sort((a,b)=>(state.cards[a.id].dueAt-state.cards[b.id].dueAt)||(a.id-b.id));
   const newWords=pool.filter(w=>!state.cards[w.id]).slice(0,stats.newRemaining);
+  const batch=stats.reviewBatch;
   if(mode==='low')return vocab.filter(w=>w.score===1&&!state.cards[w.id]).slice(0,10);
-  if(mode==='review')return due;
+  if(mode==='review')return due.slice(0,batch);
+  if(mode==='practice'){
+    // Extra voluntary practice can include studied cards that aren't due yet.
+    // Due cards are always first, followed by upcoming cards in original order.
+    return [...due,...pool.filter(w=>state.cards[w.id]&&!isDue(state.cards[w.id],now))].slice(0,batch);
+  }
   if(mode==='new')return newWords;
   if(mode==='favorites')return pool.filter(w=>state.favorites.includes(w.id));
-  return [...due,...newWords];
+  return [...due.slice(0,batch),...newWords];
 }
 
 
@@ -170,6 +191,13 @@ function toast(message){
   clearTimeout(toastHandle);toastHandle=setTimeout(()=>el.classList.remove('show'),2700);
 }
 function speak(text){
+  const native=window.__kaoyanNativeTTS;
+  if(native?.supported){
+    const phrase=String(text).replace(/\s*\/\s*/g,', ');
+    native.speak(phrase,progress.settings.accent||'en-US',Number(progress.settings.speed)||.88)
+      .catch(error=>{console.warn('Native TTS',error);toast('安卓发音失败，请在手机设置中安装英语语音包');});
+    return;
+  }
   if(!('speechSynthesis' in window)||!('SpeechSynthesisUtterance' in window)){toast('当前浏览器不支持语音朗读');return;}
   try{
     const synth=window.speechSynthesis;
@@ -208,7 +236,13 @@ function startSession(mode){
 function rate(grade){
   const word=currentCard();if(!word||!revealed)return;
   const now=new Date(),prev=progress.cards[word.id];
-  progress.cards[word.id]=scheduleCard(prev,grade,now);
+  const isExtraPractice=session.mode==='practice' && prev && !isDue(prev,now.getTime());
+  if(isExtraPractice && grade!==0){
+    // Extra review must not artificially push the next spaced-repetition date.
+    progress.cards[word.id]={...prev,lastStudied:localDateKey(now),lastGrade:grade,reps:Number(prev.reps||0)+1};
+  }else{
+    progress.cards[word.id]=scheduleCard(prev,grade,now,{lapseMinutes:progress.settings.lapseMinutes});
+  }
   progress.events.push({t:now.toISOString(),id:word.id,grade,new:!prev});
   if(progress.events.length>35000)progress.events.splice(0,progress.events.length-35000);
   save();session.index++;session.answered++;revealed=false;render();
@@ -240,6 +274,7 @@ function renderHome(s){
       <div class="kicker">你的今日计划</div>
       <strong>${s.due?`先复习 <em>${s.due}</em> 词`:'先把今天的词搞定'}<br>${s.newRemaining?`再学 <em>${s.newRemaining}</em> 词`:'再巩固已学词'}</strong>
       <p class="hero-note">${summary}</p>
+      <div class="review-target-line">今日复习 <b>${s.reviewedToday}</b> / ${s.reviewTarget} 次 · 到期 ${s.due} 词</div>
       <div class="hero-actions">
         <button class="button white" type="button" data-action="start" data-mode="mixed">开始今日学习 <span aria-hidden="true">→</span></button>
         <button class="button glass" type="button" data-action="start" data-mode="review">仅复习到期词</button>
@@ -253,11 +288,13 @@ function renderHome(s){
     </div>
     <div class="spacer"></div>
     <section class="card progress-card"><div class="flex-between"><strong>必背范围进度</strong><span class="small mono">${s.totalProgress}% 已接触</span></div><div class="progress-track"><div class="progress-fill" style="width:${pct(s.totalProgress)}%"></div></div><div class="progress-meta"><span>已掌握 ${formatNum(s.mastered)} 词</span><span>未学习 ${formatNum(s.unseen)} 词</span></div></section>
-    <div class="heading-row"><h2>按自己的节奏</h2><button class="button ghost small-btn" data-action="nav" data-view="settings">调整目标 ↗</button></div>
+    <div class="heading-row"><h2>按自己的节奏</h2><button class="button ghost small-btn" data-action="nav" data-view="settings">调整复习数量和间隔 ↗</button></div>
     <div class="cta-cards">
       <button class="action-card" type="button" data-action="start" data-mode="new"><span class="action-icon">＋</span><strong>专学新词</strong><span class="note">严格按你的原词频顺序</span></button>
       <button class="action-card green-card" type="button" data-action="bonus"><span class="action-icon">↗</span><strong>今天多学 10 个</strong><span class="note">有余力再加，不影响原目标</span></button>
     </div>
+    <div class="spacer"></div>
+    <section class="card form-card" style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><strong>自由加练 · 每组最多 ${s.reviewBatch} 次</strong><div class="small">已学单词也能重练，不必等到下一次到期；提前练习不会把到期时间推迟</div></div><button class="button outline small-btn" data-action="start" data-mode="practice">开始加练 →</button></section>
     <div class="spacer"></div>
     <section class="card form-card" style="display:flex;justify-content:space-between;align-items:center;gap:15px;flex-wrap:wrap"><div><strong>低频加餐 · 考频 1</strong><div class="small">完成高频任务还有精力时，再背 10 个低频词</div></div><button class="button outline small-btn" data-action="start" data-mode="low">学习 10 个 →</button></section>
     <div class="spacer"></div>
@@ -267,20 +304,23 @@ function renderHome(s){
 function renderStudy(stats){
   if(!session){
     return `<div class="eyebrow">RETRIEVAL FIRST</div><h1 class="page-title">开始一次真正的回忆练习</h1><p class="lead">先听或看英文，尝试说出精简中文义，最后再核对答案。到期词会优先出现。</p>
-      <section class="card form-card"><div class="stat-table"><span>到期复习</span><strong>${stats.due} 词</strong><span>今日待学</span><strong>${stats.newRemaining} 词</strong><span>考频目标</span><strong>${escapeHtml(stats.goal.label)}</strong></div><div class="divider"></div><button class="button primary full" data-action="start" data-mode="mixed">开始学习</button></section>
-      <div class="cta-cards"><button class="action-card" data-action="start" data-mode="review"><span class="action-icon">↻</span><strong>只复习</strong><span class="note">清理到期记忆</span></button><button class="action-card green-card" data-action="start" data-mode="new"><span class="action-icon">＋</span><strong>只学新词</strong><span class="note">沿原词表顺序</span></button></div>
+      <section class="card form-card"><div class="stat-table"><span>到期复习</span><strong>${stats.due} 词</strong><span>今日待学</span><strong>${stats.newRemaining} 词</strong><span>今日复习目标</span><strong>${stats.reviewedToday} / ${stats.reviewTarget} 次</strong><span>考频目标</span><strong>${escapeHtml(stats.goal.label)}</strong></div><div class="divider"></div><button class="button primary full" data-action="start" data-mode="mixed">开始学习</button></section>
+      <div class="cta-cards"><button class="action-card" data-action="start" data-mode="review"><span class="action-icon">↻</span><strong>只复习</strong><span class="note">清理到期记忆</span></button><button class="action-card green-card" data-action="start" data-mode="practice"><span class="action-icon">↗</span><strong>自由复习</strong><span class="note">单次最多 ${stats.reviewBatch} 次，含未到期词</span></button></div><div class="spacer"></div><button class="button outline full" data-action="start" data-mode="new">只学新词（按考频顺序）</button>
       <p class="footnote">键盘操作：空格显示释义；显示后用 1–4 对应四档评分；按 P 播放发音。</p>`;
   }
   if(!session.ids.length){
-    const message=session.mode==='review'?'当前没有到期复习词。':'此范围今天没有需要学习的词。';
+    const message=session.mode==='review'?'当前没有到期复习词。':session.mode==='practice'?'先学习一些新词，才能开始自由复习。':'此范围今天没有需要学习的词。';
     return `<section class="card empty-state"><div class="empty-icon">✓</div><h3>今天这一组已经完成</h3><p>${message}<br>忘记的词会在设定的间隔后再次出现。</p><button class="button primary" data-action="nav" data-view="home">返回今日计划</button><button class="button ghost" data-action="new-session">重新选择练习</button></section>`;
   }
   const w=currentCard();
   if(!w){
-    return `<section class="card empty-state"><div class="empty-icon">✦</div><h3>这一轮完成了！</h3><p>本轮回答了 ${session.answered} 次。<br>到期复习优先，新的任务会根据记忆情况自动产生。</p><button class="button primary" data-action="nav" data-view="home">查看今日进度</button><button class="button ghost" data-action="new-session">继续下一轮</button></section>`;
+    const future=Object.values(progress.cards).filter(c=>c&&Number(c.dueAt)>Date.now()).map(c=>c.dueAt);
+    const next=future.length?Math.min(...future):null;
+    const delay=next?Math.max(1,Math.ceil((next-Date.now())/60000)):null;
+    return `<section class="card empty-state"><div class="empty-icon">✦</div><h3>这一轮完成了！</h3><p>本轮回答了 ${session.answered} 次。<br>${delay?`预计最快 ${delay} 分钟后有词到期；页面保持打开会自动刷新。`:'可继续选择新的练习任务。'}</p><button class="button primary" data-action="nav" data-view="home">查看今日进度</button><button class="button ghost" data-action="new-session">继续下一轮</button></section>`;
   }
   const pos=session.index+1, fav=progress.favorites.includes(w.id);
-  const label=session.mode==='new'?'新词学习':session.mode==='review'?'到期复习':session.mode==='favorites'?'收藏巩固':session.mode==='low'?'低频加餐':'混合学习';
+  const label=session.mode==='new'?'新词学习':session.mode==='review'?'到期复习':session.mode==='practice'?'自由复习':session.mode==='favorites'?'收藏巩固':session.mode==='low'?'低频加餐':'混合学习';
   return `<div class="study-shell">
     <div class="study-top"><div><div class="sub">${label}</div><strong>${pos} <span class="small">/ ${session.ids.length}</span></strong></div><button class="button outline small-btn" data-action="nav" data-view="home">退出练习</button></div>
     <div class="segment-progress" role="progressbar" aria-valuenow="${session.index}" aria-valuemin="0" aria-valuemax="${session.ids.length}"><div class="fill" style="width:${pct(session.index/session.ids.length*100)}%"></div></div>
@@ -293,7 +333,7 @@ function renderStudy(stats){
       <div class="source-index">原词表第 ${w.id} 位</div>
     </section>
     <div class="study-actions">
-      ${revealed?`<div class="rating-grid"><button class="rating fail" data-action="rate" data-grade="0"><strong>不会</strong><span>10分钟后</span></button><button class="rating vague" data-action="rate" data-grade="1"><strong>模糊</strong><span>明天再见</span></button><button class="rating recall" data-action="rate" data-grade="2"><strong>记得</strong><span>间隔复习</span></button><button class="rating easy" data-action="rate" data-grade="3"><strong>熟练</strong><span>延长间隔</span></button></div>`:
+      ${revealed?`<div class="rating-grid"><button class="rating fail" data-action="rate" data-grade="0"><strong>不会</strong><span>${boundedSetting(progress.settings.lapseMinutes,10,1,120)}分钟后</span></button><button class="rating vague" data-action="rate" data-grade="1"><strong>模糊</strong><span>明天再见</span></button><button class="rating recall" data-action="rate" data-grade="2"><strong>记得</strong><span>间隔复习</span></button><button class="rating easy" data-action="rate" data-grade="3"><strong>熟练</strong><span>延长间隔</span></button></div>`:
         `<button class="button primary full" type="button" data-action="reveal" style="padding:18px">显示中文释义 <span aria-hidden="true">↗</span></button>`}
       <div class="study-help">${revealed?'请根据揭示前的真实回忆评分，不要看答案后才觉得会。':'空格显示释义 · P 播放发音'}</div>
     </div>
@@ -346,6 +386,12 @@ function renderInsights(s){
 function renderSettings(stats){
   return `<div class="eyebrow">YOUR STUDY SYSTEM</div><h1 class="page-title">让计划适合你</h1><p class="lead">从今天开始算 50 天；前 42 天按考频顺序认识新词，后 8 天集中巩固。所有更改即时保存。</p>
     <section class="card form-card"><h3>词频目标</h3><p>先完成大于 3 次的词，再增加 3 次、2 次和低频词。切换目标不会抹掉你之前的复习记录。</p><label class="form-label" for="goal">选择每日计划覆盖范围</label><select class="field" id="goal" data-setting="goal">${GOALS.map(g=>`<option value="${g.id}" ${progress.settings.goal===g.id?'selected':''}>${g.label}（${formatNum(eligibleWords(vocab,g.id).length)} 词）</option>`).join('')}</select><div class="divider"></div><div class="stat-table"><span>已开始日期</span><strong>${escapeHtml(progress.startedOn)}</strong><span>剩余新词</span><strong>${formatNum(stats.unseen)} 词</strong><span>建议每日新词</span><strong>${stats.baseDaily} 词</strong></div></section>
+    <section class="card form-card"><h3>自定义复习计划</h3><p>你可以每天复习 100 次、120 次或自己设定的数量。一次回答记为一次；到期复习优先，不足时可通过「自由复习」加练，不强迫凑次数。</p>
+      <div class="setting-row"><label for="reviewTarget">每日复习目标<small>可设 1–500 次，今日完成 ${stats.reviewedToday} 次</small></label><input class="field number-field" id="reviewTarget" type="number" inputmode="numeric" min="1" max="500" step="1" data-setting="reviewTarget" value="${stats.reviewTarget}" /></div>
+      <div class="setting-row"><label for="reviewBatch">每轮最多复习<small>例如 100 或 120 次，避免一轮太长</small></label><input class="field number-field" id="reviewBatch" type="number" inputmode="numeric" min="1" max="500" step="1" data-setting="reviewBatch" value="${stats.reviewBatch}" /></div>
+      <div class="setting-row"><label for="lapseMinutes">点击「不会」后多久复习<small>5 分钟、10 分钟，或自定 1–120 分钟</small></label><select class="field" id="lapseMinutes" data-setting="lapseMinutes">${[5,10,15,20,30,60].concat([boundedSetting(progress.settings.lapseMinutes,10,1,120)]).filter((n,i,a)=>a.indexOf(n)===i).sort((a,b)=>a-b).map(m=>`<option value="${m}" ${boundedSetting(progress.settings.lapseMinutes,10,1,120)===m?'selected':''}>${m} 分钟</option>`).join('')}</select></div>
+      <div class="setting-row"><label for="customLapse">自定义分钟数<small>填写后自动覆盖上方选项</small></label><input class="field number-field" id="customLapse" type="number" inputmode="numeric" min="1" max="120" step="1" placeholder="例如 5 或 10" data-setting="customLapse" /></div>
+      <p class="footnote">复习目标是计划，不是强制上限。单次批量限制只影响组队数量；本来已经排好的到期时间不因改设置而追溯改变。</p></section>
     <section class="card form-card"><h3>发音设置</h3><p>使用手机或电脑浏览器的系统英语语音。点击扬声器即可听读。</p>
       <div class="setting-row"><label for="accent">发音口音<small>优先选用设备提供的对应语音</small></label><select class="field" id="accent" data-setting="accent"><option value="en-US" ${progress.settings.accent==='en-US'?'selected':''}>美式英语</option><option value="en-GB" ${progress.settings.accent==='en-GB'?'selected':''}>英式英语</option></select></div>
       <div class="setting-row"><label for="speed">朗读速度</label><select class="field" id="speed" data-setting="speed">${[[0.7,'较慢 · 0.7x'],[0.88,'舒适 · 0.88x'],[1,'正常 · 1.0x'],[1.12,'稍快 · 1.12x']].map(([s,t])=>`<option value="${s}" ${Number(progress.settings.speed)===s?'selected':''}>${t}</option>`).join('')}</select></div>
@@ -357,6 +403,10 @@ function renderSettings(stats){
 }
 
 function downloadBlob(filename,text,type='application/json'){
+  if(window.__kaoyanNativeExport?.supported){
+    window.__kaoyanNativeExport.export(filename,text).catch(e=>{console.warn('Native export',e);toast('分享备份失败，请检查手机文件应用');});
+    return;
+  }
   const blob=new Blob([text],{type:`${type};charset=utf-8`});
   const url=URL.createObjectURL(blob);const link=document.createElement('a');
   link.href=url;link.download=filename;document.body.appendChild(link);link.click();link.remove();setTimeout(()=>URL.revokeObjectURL(url),1000);
@@ -415,6 +465,9 @@ document.addEventListener('change',event=>{
   if(setting==='accent')progress.settings.accent=t.value==='en-GB'?'en-GB':'en-US';
   if(setting==='speed')progress.settings.speed=Number(t.value)||.88;
   if(setting==='autoSpeak')progress.settings.autoSpeak=t.checked;
+  if(setting==='reviewTarget')progress.settings.reviewTarget=boundedSetting(t.value,100,1,500);
+  if(setting==='reviewBatch'){progress.settings.reviewBatch=boundedSetting(t.value,100,1,500);session=null;}
+  if(setting==='lapseMinutes'||setting==='customLapse')progress.settings.lapseMinutes=boundedSetting(t.value,10,1,120);
   save();render();
 });
 window.addEventListener('keydown',event=>{
@@ -424,6 +477,14 @@ window.addEventListener('keydown',event=>{
   else if(event.key.toLowerCase()==='p'){if(currentCard())speak(currentCard().word);}
   else if(revealed&&['1','2','3','4'].includes(event.key)){rate(Number(event.key)-1);}
 });
+// Recheck the queue while this view is open: a failed card becomes due after 5/10 minutes.
+setInterval(()=>{
+  if(!vocab.length||view!=='study'||!session||session.index<session.ids.length)return;
+  const due=sessionWords(vocab,progress,'review',new Date());
+  if(due.length){startSession('review');toast('到期复习已自动开始');}
+  else render();
+},15000);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden&&vocab.length)render();});
 window.addEventListener('beforeinstallprompt',event=>{event.preventDefault();installPrompt=event;});
 document.getElementById('import-file').addEventListener('change',async event=>{
   const file=event.target.files?.[0];if(!file)return;
